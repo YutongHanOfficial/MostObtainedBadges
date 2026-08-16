@@ -1,5 +1,4 @@
 <script>
-
 const inputArea = document.getElementById('inputArea');
 const parseBtn = document.getElementById('parseBtn');
 const fetchBtn = document.getElementById('fetchBtn');
@@ -18,21 +17,23 @@ let isFetching = false;
 
 
 /*
- * IMPORTANT:
- * Replace this with your deployed Google Apps Script Web App URL.
+ * Roblox's actual API:
  *
- * Example:
- * https://script.google.com/macros/s/ABC123.../exec
+ * https://badges.roblox.com/v1/badges/{badgeId}
+ *
+ * We use RoProxy only because a browser page cannot reliably
+ * make a cross-origin request directly to Roblox.
  */
-const APPS_SCRIPT_URL =
-  'PASTE_YOUR_APPS_SCRIPT_WEB_APP_URL_HERE';
+const BADGE_API =
+  'https://badges.roproxy.com/v1/badges/';
 
 
-/* ---------------------------------------------------------
+/* =========================================================
    PARSE INPUT
---------------------------------------------------------- */
+========================================================= */
 
 function parseInputText(text) {
+
   const lines = text
     .split(/\r?\n/)
     .map(line => line.trim())
@@ -42,31 +43,40 @@ function parseInputText(text) {
 
   for (const line of lines) {
 
-    // Supports:
-    // Game,Badge Name,BadgeID
-    //
-    // Also supports quoted CSV fields.
+    /*
+     * Expected:
+     * Game,Badge Name,BadgeID
+     */
+
     const parts =
       line.match(/(".*?"|[^,]+)(?=\s*,|\s*$)/g)
-        ?.map(s => s.replace(/^"|"$/g, '').trim())
-      || [];
+        ?.map(s =>
+          s.replace(/^"|"$/g, '').trim()
+        ) || [];
 
     const game = parts[0] || '';
     const name = parts[1] || '';
 
-    // Third column is ALWAYS treated as the badge ID.
-    // This avoids the old ID/count guessing problem.
-    const id = (parts[2] || '').replace(/\D/g, '');
+    /*
+     * Third column is ALWAYS the Badge ID.
+     *
+     * Do not try to determine whether it's a count.
+     * Your input format already tells us it's an ID.
+     */
+    const id =
+      (parts[2] || '').replace(/\D/g, '');
 
     if (game || name || id) {
+
       parsed.push({
-        game,
-        name,
-        id,
+        game: game,
+        name: name,
+        id: id,
         count: null,
         lastFetched: null,
         error: null
       });
+
     }
   }
 
@@ -74,35 +84,52 @@ function parseInputText(text) {
 }
 
 
-/* ---------------------------------------------------------
+/* =========================================================
    RENDER TABLE
---------------------------------------------------------- */
+========================================================= */
 
 function renderTable() {
 
   tbody.innerHTML = '';
 
   if (badges.length === 0) {
+
     table.style.display = 'none';
-    statusEl.textContent = 'No badges parsed yet.';
+
+    statusEl.textContent =
+      'No badges parsed yet.';
+
     return;
   }
 
   table.style.display = '';
 
+  /*
+   * Highest awarded count first.
+   */
   const sorted = [...badges].sort((a, b) => {
 
-    const ca = a.count == null ? -1 : Number(a.count);
-    const cb = b.count == null ? -1 : Number(b.count);
+    const ca =
+      a.count == null
+        ? -1
+        : Number(a.count);
+
+    const cb =
+      b.count == null
+        ? -1
+        : Number(b.count);
 
     return cb - ca;
   });
 
+
   sorted.forEach((b, index) => {
 
-    const tr = document.createElement('tr');
+    const tr =
+      document.createElement('tr');
 
     tr.innerHTML = `
+
       <td>${index + 1}</td>
 
       <td>
@@ -132,29 +159,46 @@ function renderTable() {
       <td>
         ${
           b.lastFetched
-            ? new Date(b.lastFetched).toLocaleString()
+            ? new Date(
+                b.lastFetched
+              ).toLocaleString()
             : '—'
         }
       </td>
+
     `;
+
+    /*
+     * Show the error when hovering the row.
+     */
+    if (b.error) {
+      tr.title = b.error;
+    }
 
     tbody.appendChild(tr);
   });
 
-  const withIds = badges.filter(b => b.id).length;
 
-  const errors = badges.filter(b => b.error).length;
+  const ids =
+    badges.filter(b => b.id).length;
+
+  const errors =
+    badges.filter(b => b.error).length;
 
   statusEl.textContent =
     `Parsed ${badges.length} badges. ` +
-    `${withIds} have IDs.` +
-    (errors ? ` ${errors} failed.` : '');
+    `${ids} have IDs.` +
+    (
+      errors
+        ? ` ${errors} failed.`
+        : ''
+    );
 }
 
 
-/* ---------------------------------------------------------
+/* =========================================================
    HELPERS
---------------------------------------------------------- */
+========================================================= */
 
 function numberWithCommas(value) {
 
@@ -170,85 +214,109 @@ function escapeHtml(value) {
 
   return String(value).replace(
     /[&<>"']/g,
-    c => ({
+    char => ({
       '&': '&amp;',
       '<': '&lt;',
       '>': '&gt;',
       '"': '&quot;',
       "'": '&#39;'
-    }[c])
+    }[char])
   );
 }
 
 
 function sleep(ms) {
-  return new Promise(resolve => setTimeout(resolve, ms));
+
+  return new Promise(
+    resolve => setTimeout(resolve, ms)
+  );
 }
 
 
-/* ---------------------------------------------------------
-   FETCH ONE BADGE
---------------------------------------------------------- */
+/* =========================================================
+   GET BADGE FROM ROBLOX API
+========================================================= */
 
 async function fetchBadge(badgeId) {
 
   if (!badgeId) {
-    throw new Error('Missing badge ID');
-  }
-
-  if (
-    !APPS_SCRIPT_URL ||
-    APPS_SCRIPT_URL.includes('PASTE_YOUR')
-  ) {
     throw new Error(
-      'Set APPS_SCRIPT_URL to your deployed Apps Script URL'
+      'Missing badge ID'
     );
   }
 
+  /*
+   * This ultimately requests:
+   *
+   * https://badges.roblox.com/v1/badges/123456789
+   *
+   * through RoProxy.
+   */
   const url =
-    APPS_SCRIPT_URL +
-    '?badgeId=' +
-    encodeURIComponent(badgeId) +
-    '&_=' +
-    Date.now();
+    BADGE_API +
+    encodeURIComponent(badgeId);
 
-  const response = await fetch(url, {
-    method: 'GET',
-    cache: 'no-store'
-  });
+
+  const response =
+    await fetch(url, {
+      method: 'GET',
+
+      /*
+       * Don't allow the browser to use
+       * an old cached API response.
+       */
+      cache: 'no-store',
+
+      headers: {
+        'Accept': 'application/json'
+      }
+    });
+
 
   if (!response.ok) {
+
     throw new Error(
-      'Apps Script HTTP ' + response.status
+      `HTTP ${response.status}`
     );
   }
 
-  const data = await response.json();
 
-  if (!data.success) {
-    throw new Error(
-      data.error || 'Badge lookup failed'
-    );
-  }
+  const data =
+    await response.json();
+
+
+  /*
+   * Roblox response structure:
+   *
+   * {
+   *   ...
+   *   "statistics": {
+   *      "awardedCount": 123
+   *   }
+   * }
+   */
+
+  const awarded =
+    data?.statistics?.awardedCount;
+
 
   if (
-    typeof data.awardedCount !== 'number'
+    typeof awarded !== 'number'
   ) {
+
     throw new Error(
-      'No awardedCount returned'
+      'awardedCount not found in Roblox response'
     );
   }
 
-  return {
-    count: data.awardedCount,
-    fetchedAt: data.fetchedAt
-  };
+
+  return awarded;
 }
 
 
-/* ---------------------------------------------------------
-   FETCH ALL BADGES
---------------------------------------------------------- */
+/* =========================================================
+   FETCH EVERYTHING
+========================================================= */
 
 async function doFetchAll() {
 
@@ -259,12 +327,17 @@ async function doFetchAll() {
   if (badges.length === 0) {
 
     statusEl.textContent =
-      'No badges to fetch. Paste badges and click Parse & Track.';
+      'No badges to fetch. Parse your badges first.';
 
     return;
   }
 
-  const toFetch = badges.filter(b => b.id);
+
+  const toFetch =
+    badges.filter(
+      badge => badge.id
+    );
+
 
   if (toFetch.length === 0) {
 
@@ -274,68 +347,104 @@ async function doFetchAll() {
     return;
   }
 
+
   isFetching = true;
 
   fetchBtn.disabled = true;
 
-  progressBar.style.width = '0%';
+  progressBar.style.width =
+    '0%';
 
-  let fetched = 0;
+
+  let completed = 0;
   let failed = 0;
+
 
   statusEl.textContent =
     `Fetching ${toFetch.length} badges...`;
 
+
   try {
 
+    /*
+     * Sequential requests prevent us from
+     * hammering the proxy.
+     */
     for (const badge of toFetch) {
 
       try {
 
-        // Pace requests.
-        await sleep(300);
+        await sleep(250);
 
-        const result =
-          await fetchBadge(badge.id);
+        const count =
+          await fetchBadge(
+            badge.id
+          );
 
-        badge.count = result.count;
-        badge.lastFetched = Date.now();
+
+        /*
+         * THIS is the important part.
+         *
+         * Replace the old value with the
+         * current Roblox awardedCount.
+         */
+        badge.count = count;
+
+        badge.lastFetched =
+          Date.now();
+
         badge.error = null;
 
       } catch (error) {
 
         failed++;
 
-        badge.error = error.message;
+        badge.error =
+          error.message;
 
-        // Keep the previous successful count.
-        // Don't replace it with zero or null.
+        /*
+         * Keep the last known count rather
+         * than destroying it when one request
+         * fails.
+         */
       }
 
-      fetched++;
 
-      const percentage =
+      completed++;
+
+
+      const percent =
         Math.round(
-          (fetched / toFetch.length) * 100
+          completed /
+          toFetch.length *
+          100
         );
 
+
       progressBar.style.width =
-        percentage + '%';
+        percent + '%';
+
 
       statusEl.textContent =
-        `Fetching ${fetched}/${toFetch.length}` +
-        (failed
-          ? ` — ${failed} failed`
-          : '');
+        `Fetching ${completed}/${toFetch.length}` +
+        (
+          failed
+            ? ` — ${failed} failed`
+            : ''
+        );
+
 
       renderTable();
     }
 
+
     statusEl.textContent =
-      `Fetch complete — ${fetched} checked` +
-      (failed
-        ? `, ${failed} failed.`
-        : '.');
+      `Fetch complete — ${completed} badges checked` +
+      (
+        failed
+          ? `, ${failed} failed.`
+          : '.'
+      );
 
   } finally {
 
@@ -346,151 +455,197 @@ async function doFetchAll() {
 }
 
 
-/* ---------------------------------------------------------
-   PARSE BUTTON
---------------------------------------------------------- */
+/* =========================================================
+   BUTTONS
+========================================================= */
 
-parseBtn.addEventListener('click', () => {
+parseBtn.addEventListener(
+  'click',
+  () => {
 
-  badges =
-    parseInputText(inputArea.value);
-
-  renderTable();
-});
-
-
-/* ---------------------------------------------------------
-   CLEAR
---------------------------------------------------------- */
-
-clearBtn.addEventListener('click', () => {
-
-  badges = [];
-
-  inputArea.value = '';
-
-  renderTable();
-});
-
-
-/* ---------------------------------------------------------
-   SAMPLE
---------------------------------------------------------- */
-
-loadSample.addEventListener('click', () => {
-
-  const sample = [
-    'The Floor Is LAVA!,You played!,724041081',
-    'Livetopia 🏡 RP,Welcome to Livetopia,593806233',
-    'Easy Obby,Welcome!,496714103',
-    'DOORS 👁️,Welcome,468288140',
-    'Color Block,Welcome to Color Block!,421144110'
-  ].join('\n');
-
-  inputArea.value = sample;
-
-  badges =
-    parseInputText(sample);
-
-  renderTable();
-});
-
-
-/* ---------------------------------------------------------
-   AUTO REFRESH
---------------------------------------------------------- */
-
-toggleAuto.addEventListener('click', () => {
-
-  if (autoTimer) {
-
-    clearInterval(autoTimer);
-
-    autoTimer = null;
-
-    toggleAuto.textContent = 'Start';
-
-    toggleAuto.classList.add('ghost');
-
-    statusEl.textContent =
-      'Auto-refresh stopped.';
-
-    return;
-  }
-
-  const minutes =
-    Math.max(
-      1,
-      parseInt(
-        intervalInput.value || '5',
-        10
-      )
-    );
-
-  const milliseconds =
-    minutes * 60 * 1000;
-
-  // Fetch immediately.
-  doFetchAll();
-
-  // Then keep refreshing.
-  autoTimer =
-    setInterval(
-      () => doFetchAll(),
-      milliseconds
-    );
-
-  toggleAuto.textContent = 'Stop';
-
-  toggleAuto.classList.remove('ghost');
-
-  statusEl.textContent =
-    `Auto-refresh enabled — every ${minutes} minute(s).`;
-});
-
-
-/* ---------------------------------------------------------
-   COPY BADGE ID
---------------------------------------------------------- */
-
-tbody.addEventListener('click', event => {
-
-  const row =
-    event.target.closest('tr');
-
-  if (!row) {
-    return;
-  }
-
-  const code =
-    row.querySelector(
-      'td:nth-child(4) code'
-    );
-
-  if (!code) {
-    return;
-  }
-
-  navigator.clipboard
-    ?.writeText(code.textContent || '')
-    .then(() => {
-
-      statusEl.textContent =
-        'BadgeID copied to clipboard.';
-
-      setTimeout(
-        renderTable,
-        1200
+    badges =
+      parseInputText(
+        inputArea.value
       );
 
-    })
-    .catch(() => {});
-});
+    renderTable();
+  }
+);
 
 
-/* ---------------------------------------------------------
-   PREFILL YOUR BADGE LIST
---------------------------------------------------------- */
+clearBtn.addEventListener(
+  'click',
+  () => {
+
+    badges = [];
+
+    inputArea.value = '';
+
+    renderTable();
+  }
+);
+
+
+loadSample.addEventListener(
+  'click',
+  () => {
+
+    const sample = [
+      'The Floor Is LAVA!,You played!,724041081',
+      'Livetopia 🏡 RP,Welcome to Livetopia,593806233',
+      'Easy Obby,Welcome!,496714103',
+      'DOORS 👁️,Welcome,468288140',
+      'Color Block,Welcome to Color Block!,421144110'
+    ].join('\n');
+
+
+    inputArea.value =
+      sample;
+
+
+    badges =
+      parseInputText(
+        sample
+      );
+
+
+    renderTable();
+  }
+);
+
+
+fetchBtn.addEventListener(
+  'click',
+  doFetchAll
+);
+
+
+/* =========================================================
+   AUTO REFRESH
+========================================================= */
+
+toggleAuto.addEventListener(
+  'click',
+  () => {
+
+    if (autoTimer) {
+
+      clearInterval(
+        autoTimer
+      );
+
+      autoTimer = null;
+
+      toggleAuto.textContent =
+        'Start';
+
+      toggleAuto.classList.add(
+        'ghost'
+      );
+
+      statusEl.textContent =
+        'Auto-refresh stopped.';
+
+      return;
+    }
+
+
+    const minutes =
+      Math.max(
+        1,
+        parseInt(
+          intervalInput.value || '5',
+          10
+        )
+      );
+
+
+    const interval =
+      minutes *
+      60 *
+      1000;
+
+
+    /*
+     * Fetch immediately.
+     */
+    doFetchAll();
+
+
+    /*
+     * Then keep updating.
+     */
+    autoTimer =
+      setInterval(
+        () => doFetchAll(),
+        interval
+      );
+
+
+    toggleAuto.textContent =
+      'Stop';
+
+    toggleAuto.classList.remove(
+      'ghost'
+    );
+
+
+    statusEl.textContent =
+      `Auto-refresh enabled — every ${minutes} minute(s).`;
+  }
+);
+
+
+/* =========================================================
+   COPY BADGE ID
+========================================================= */
+
+tbody.addEventListener(
+  'click',
+  event => {
+
+    const tr =
+      event.target.closest('tr');
+
+    if (!tr) {
+      return;
+    }
+
+
+    const code =
+      tr.querySelector(
+        'td:nth-child(4) code'
+      );
+
+
+    if (!code) {
+      return;
+    }
+
+
+    navigator.clipboard
+      ?.writeText(
+        code.textContent || ''
+      )
+      .then(() => {
+
+        statusEl.textContent =
+          'BadgeID copied to clipboard.';
+
+        setTimeout(
+          () => renderTable(),
+          1200
+        );
+
+      })
+      .catch(() => {});
+  }
+);
+
+
+/* =========================================================
+   YOUR BADGE LIST
+========================================================= */
 
 (function prefillProvidedList() {
 
@@ -540,11 +695,16 @@ Zombie Uprising,Zombie Uprising Service Badge,241932044
 99 Nights in the Forest 🔦,survive 10 days,165580696`
   ];
 
+
   inputArea.value =
     provided.join('\n');
 
+
   badges =
-    parseInputText(inputArea.value);
+    parseInputText(
+      inputArea.value
+    );
+
 
   renderTable();
 
